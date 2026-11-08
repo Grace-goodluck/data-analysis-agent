@@ -1,0 +1,14 @@
+[project]
+name = "data-analysis-agent"
+version = "0.1.0"
+description = "Analyses one CSV file and produces a plain-English report with charts and suggested next steps."
+readme = "README.md"
+authors = [
+    { name = "Grace Ihuoma Nwakama", email = "goodluckgrace08@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
