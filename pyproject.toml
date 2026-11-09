@@ -7,8 +7,41 @@ authors = [
     { name = "Grace Ihuoma Nwakama", email = "goodluckgrace08@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "google-genai>=1.0",
+    "httpx",
+    "jinja2>=3.1",
+    "matplotlib>=3.8",
+    "pandas>=2.2",
+]
+
+[project.optional-dependencies]
+web = [
+    "fastapi>=0.110",
+    "python-multipart>=0.0.9",
+    "tzdata",
+    "uvicorn>=0.29",
+]
+
+[project.scripts]
+data-analysis = "data_analysis_agent.cli:main"
+data-analysis-web = "data_analysis_agent.web.app:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    # the web extra minus uvicorn, so `uv run pytest` can import and test the web layer
+    "fastapi>=0.110",
+    "python-multipart>=0.0.9",
+    "tzdata",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/data_analysis_agent"]

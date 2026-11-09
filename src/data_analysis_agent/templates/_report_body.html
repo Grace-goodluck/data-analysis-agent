@@ -1,0 +1,129 @@
+{# The report itself, shared by the standalone HTML file and the web results page.
+   Every value from the CSV is autoescaped. Expects: report, download_url (optional). #}
+{% set s = report.stats %}
+<p class="muted">
+  File <strong>{{ report.source_name }}</strong> · analysed {{ report.analysed_at.strftime("%Y-%m-%d %H:%M") }} ·
+  {{ s.rows|num }} rows × {{ s.columns|num }} columns
+  {% if download_url %} · <a href="{{ download_url }}">Download the report (.html)</a>{% endif %}
+</p>
+
+<h2>Summary</h2>
+{% if report.summary.available %}
+  {% for para in report.summary.text|paragraphs %}<p>{{ para }}</p>{% endfor %}
+  {% if report.summary.next_steps %}
+  <h2>Suggested next steps</h2>
+  <ol>{% for step in report.summary.next_steps %}<li>{{ step }}</li>{% endfor %}</ol>
+  {% endif %}
+{% else %}
+  <p><strong>Summary unavailable</strong> ({{ report.summary.reason }}). The statistics and charts below are complete.</p>
+{% endif %}
+
+<h2>Data quality</h2>
+<ul>
+  <li>Missing values: {{ s.missing_total|num }} in total{% if s.missing_total %}:
+    {% for c in s.column_info if c.missing %}{{ c.name }} {{ c.missing|num }} ({{ c.missing_pct|pct }}){% if not loop.last %}, {% endif %}{% endfor %}{% endif %}.</li>
+  <li>Duplicate rows: {{ s.duplicate_rows|num }} ({{ s.duplicate_pct|pct }} of rows).</li>
+  {% if s.trend and s.trend.unparsed %}
+  <li>{{ s.trend.unparsed|num }} values in {{ s.trend.column }} could not be read as dates.</li>
+  {% endif %}
+</ul>
+
+<h2>Columns</h2>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Column</th><th>Type</th><th class="n">Missing</th><th class="n">Distinct values</th></tr></thead>
+    <tbody>
+    {% for c in s.column_info %}
+      <tr><td>{{ c.name }}</td><td>{{ c.kind_label }}</td>
+          <td class="n">{{ c.missing|num }} ({{ c.missing_pct|pct }})</td><td class="n">{{ c.distinct|num }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if s.numeric %}
+<h2>Numeric columns</h2>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Column</th><th class="n">Count</th><th class="n">Mean</th><th class="n">Median</th>
+               <th class="n">Min</th><th class="n">Max</th><th class="n">Std dev</th></tr></thead>
+    <tbody>
+    {% for n in s.numeric %}
+      <tr><td>{{ n.column }}</td><td class="n">{{ n.count|num }}</td><td class="n">{{ n.mean|num }}</td>
+          <td class="n">{{ n.median|num }}</td><td class="n">{{ n.min|num }}</td><td class="n">{{ n.max|num }}</td>
+          <td class="n">{{ n.std|num }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if s.categories %}
+<h2>Most common values</h2>
+{% for top in s.categories %}
+  <h3>{{ top.column }} <span class="muted">({{ top.distinct|num }} distinct values)</span></h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Value</th><th class="n">Rows</th><th class="n">Share</th></tr></thead>
+      <tbody>
+      {% for c in top.shown %}
+        <tr><td>{{ c.value }}</td><td class="n">{{ c.count|num }}</td><td class="n">{{ c.pct|pct }}</td></tr>
+      {% endfor %}
+      {% if top.other_count %}
+        <tr><td class="muted">Other values</td><td class="n">{{ top.other_count|num }}</td><td></td></tr>
+      {% endif %}
+      </tbody>
+    </table>
+  </div>
+{% endfor %}
+{% endif %}
+
+<h2>Relationships between numeric columns</h2>
+{% if s.correlations %}
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Columns</th><th class="n">Correlation (r)</th><th>Strength</th><th class="n">Rows used</th></tr></thead>
+    <tbody>
+    {% for c in s.correlations %}
+      <tr><td>{{ c.a }} and {{ c.b }}</td><td class="n">{{ "%.2f"|format(c.r) }}</td><td>{{ c.strength }}</td>
+          <td class="n">{{ c.rows_used|num }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="muted">Pearson correlation, strongest pairs first. A correlation shows an association, not a cause.</p>
+{% else %}
+<p>Not enough numeric columns to compare.</p>
+{% endif %}
+
+<h2>Trend over time</h2>
+{% if s.trend %}
+<p>Date column <strong>{{ s.trend.column }}</strong>, from {{ s.trend.first_date.isoformat() }} to {{ s.trend.last_date.isoformat() }}. Rows per {{ s.trend.period }}:</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Period</th><th class="n">Rows</th></tr></thead>
+    <tbody>
+    {% for p in s.trend.counts %}<tr><td>{{ p.label }}</td><td class="n">{{ p.count|num }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p>No date column was found.</p>
+{% endif %}
+
+{% if report.charts %}
+<h2>Charts</h2>
+{% for chart in report.charts %}
+  <figure>
+    <img src="data:image/png;base64,{{ chart.b64 }}" alt="{{ chart.title }}">
+    <figcaption>{{ chart.title }}</figcaption>
+  </figure>
+{% endfor %}
+{% endif %}
+
+<p class="muted">
+  Statistics and charts were computed with pandas and matplotlib.
+  {% if report.summary.available %}
+  The summary was written by {{ report.model }} from the statistics only, never the rows, and every number in it was checked against the statistics.
+  {% endif %}
+</p>

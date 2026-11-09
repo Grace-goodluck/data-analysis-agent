@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}Data analysis{% if report %}: {{ report.source_name }}{% endif %}{% endblock %}
+
+{% block head %}
+  {% if job.status in ("queued", "running") %}<meta http-equiv="refresh" content="2">{% endif %}
+{% endblock %}
+
+{% block content %}
+  {% if job.status in ("queued", "running") %}
+    <div class="card" role="status">
+      <p><strong>Analysing your file…</strong></p>
+      <p class="muted">This usually takes a few seconds, longer if the AI service is busy. The page refreshes by itself.</p>
+    </div>
+
+  {% elif job.status == "error" %}
+    <div class="card error" role="alert">Something went wrong while analysing the file. Please try again later.</div>
+
+  {% else %}
+    {% include "_report_body.html" %}
+    <p><a href="/">Analyse another file</a></p>
+  {% endif %}
+{% endblock %}

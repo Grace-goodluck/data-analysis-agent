@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Upload one CSV file and get a plain-English report: contents, data quality, key statistics, trends, relationships and charts.">
+  <title>{% block title %}Data Analysis Agent{% endblock %}</title>
+  {% block head %}{% endblock %}
+  <style>
+{% include "_styles.css" %}
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1><a href="/" style="color: inherit; text-decoration: none;">Data Analysis Agent</a></h1>
+    <p class="notice" role="note"><strong>Don't upload personal or confidential data.</strong></p>
+  </header>
+
+  {% block content %}{% endblock %}
+
+  <footer class="muted">
+    <p>
+      Your file is analysed in memory and never stored. The AI summary (Google Gemini) sees only the computed
+      statistics (column names, counts, averages and the most common values), never the rows themselves, and
+      every number in it is checked against those statistics.
+    </p>
+    <p>
+      Limits: one CSV file of at most {{ max_size }} and {{ "{:,}".format(max_rows) }} rows;
+      {{ limits.analyses_per_visitor_per_hour }} analyses per visitor per hour and
+      {{ limits.analyses_per_day }} per day in total (resets at midnight Pacific time).
+    </p>
+  </footer>
+</main>
+</body>
+</html>

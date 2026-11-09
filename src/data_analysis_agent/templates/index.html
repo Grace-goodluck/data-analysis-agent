@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <p>
+    Upload one CSV file. The agent reports what the data contains, data-quality issues (missing values,
+    duplicate rows), key statistics, trends over time and relationships between columns, with charts, a
+    plain-English summary and suggested next steps.
+  </p>
+
+  {% if error %}
+    <div class="card error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <form class="card" method="post" action="/analyse" enctype="multipart/form-data">
+    <label for="file">CSV file (at most {{ max_size }})</label>
+    <input id="file" name="file" type="file" accept=".csv,text/csv" required>
+    <button type="submit">Analyse this file</button>
+  </form>
+{% endblock %}
