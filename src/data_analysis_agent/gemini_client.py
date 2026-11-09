@@ -6,6 +6,9 @@ Same design as website_audit_agent (SCOPE decision 3):
 - MemoryCache (web demo, continued 2): the same, in memory only — nothing is written to disk,
   because the prompt holds column names and category labels from the upload.
 - Pacer: every attempt, retries included, waits its turn. Cache hits never wait.
+- Timeout (continued 5): each attempt gets 60 s. No reply in time raises TimeoutError, which
+  counts as a dropped connection and follows the same retry rules. The SDK's own HTTP timeout
+  is set to the same 60 s, so an abandoned call also ends at the network level.
 - Retry: a 503, a dropped connection or a timeout is retried (command line: 30 s, then 60 s;
   web: once after 10 s); a 429 quota error is never retried.
 - make_gemini_call: the only place that touches the google-genai SDK.
@@ -23,18 +26,30 @@ from typing import Protocol
 
 import httpx
 
-from data_analysis_agent.config import GEMINI_RETRY_WAITS_S
+from data_analysis_agent.config import GEMINI_RETRY_WAITS_S, GEMINI_TIMEOUT_S
 from data_analysis_agent.pacing import Pacer
 from data_analysis_agent.ports import LLMError
 
 
-def is_unavailable(exc: BaseException) -> bool:
-    """A Gemini 503. The SDK's APIError carries an int .code; otherwise fall
-    back to its message, which starts with the status code ("503 UNAVAILABLE...")."""
+def _status_code(exc: BaseException) -> int | None:
+    """The SDK's APIError carries an int .code; otherwise fall back to its message,
+    which starts with the status code ("503 UNAVAILABLE...")."""
     code = getattr(exc, "code", None)
     if isinstance(code, int):
-        return code == 503
-    return str(exc).lstrip().startswith("503")
+        return code
+    head = str(exc).lstrip()[:3]
+    return int(head) if head.isdigit() else None
+
+
+def is_unavailable(exc: BaseException) -> bool:
+    """A Gemini 503."""
+    return _status_code(exc) == 503
+
+
+def is_deadline_exceeded(exc: BaseException) -> bool:
+    """A Gemini 504 DEADLINE_EXCEEDED: the server enforcing our 60 s timeout (the SDK sends it
+    as the request deadline), so it counts as a timeout (continued 5)."""
+    return _status_code(exc) == 504
 
 
 # A dropped connection or timeout as it comes out of the SDK (which calls httpx),
@@ -53,8 +68,8 @@ def is_dropped_connection(exc: BaseException) -> bool:
 
 
 def is_retryable(exc: BaseException) -> bool:
-    """503, dropped connection or timeout. Never a 429."""
-    return is_unavailable(exc) or is_dropped_connection(exc)
+    """503, dropped connection or timeout (ours, or the server's 504). Never a 429."""
+    return is_unavailable(exc) or is_deadline_exceeded(exc) or is_dropped_connection(exc)
 
 
 class Cache(Protocol):
@@ -122,6 +137,46 @@ class MemoryCache:
             return len(self._entries)
 
 
+def _event_wait(event: threading.Event, seconds: float) -> None:
+    event.wait(seconds)
+
+
+def call_with_timeout(
+    call: Callable[[str], str],
+    prompt: str,
+    timeout_s: float,
+    clock: Callable[[], float] = time.monotonic,
+    wait: Callable[[threading.Event, float], None] = _event_wait,
+) -> str:
+    """Run call(prompt) on a worker thread; raise TimeoutError if it has not answered by the deadline.
+
+    `wait(done, seconds)` blocks until the call finishes or `seconds` pass; tests inject a fake
+    clock and wait so a call that never answers times out without real waiting. A timed-out call's
+    thread is a daemon and is abandoned (the SDK's HTTP timeout ends it soon after).
+    """
+    done = threading.Event()
+    outcome: dict[str, object] = {}
+
+    def work() -> None:
+        try:
+            outcome["text"] = call(prompt)
+        except BaseException as exc:  # handed back to the caller below
+            outcome["error"] = exc
+        finally:
+            done.set()
+
+    threading.Thread(target=work, name="gemini-call", daemon=True).start()
+    deadline = clock() + timeout_s
+    while not done.is_set():
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise TimeoutError(f"no reply from Gemini within {timeout_s:g} s")
+        wait(done, remaining)
+    if "error" in outcome:
+        raise outcome["error"]  # type: ignore[misc]
+    return outcome["text"]  # type: ignore[return-value]
+
+
 class GeminiLLM:
     def __init__(
         self,
@@ -131,6 +186,9 @@ class GeminiLLM:
         pacer: Pacer,
         retry_waits: Sequence[float] = GEMINI_RETRY_WAITS_S,
         sleep: Callable[[float], None] = time.sleep,
+        timeout_s: float = GEMINI_TIMEOUT_S,
+        clock: Callable[[], float] = time.monotonic,
+        wait: Callable[[threading.Event, float], None] = _event_wait,
     ) -> None:
         self.model = model
         self._call = call
@@ -138,6 +196,9 @@ class GeminiLLM:
         self._pacer = pacer
         self._retry_waits = tuple(retry_waits)
         self._sleep = sleep
+        self._timeout_s = timeout_s
+        self._clock = clock
+        self._wait = wait
 
     def generate(self, prompt: str) -> str:
         cached = self._cache.get(self.model, prompt)
@@ -148,7 +209,7 @@ class GeminiLLM:
         while True:
             self._pacer.wait_turn()  # every attempt, retries included, goes through the pacer
             try:
-                text = self._call(prompt)
+                text = call_with_timeout(self._call, prompt, self._timeout_s, self._clock, self._wait)
                 break
             except Exception as exc:  # SDK raises many types; all mean "this call failed"
                 wait = next(waits, None) if is_retryable(exc) else None
@@ -162,10 +223,11 @@ class GeminiLLM:
         return text
 
 
-def make_gemini_call(model: str, api_key: str) -> Callable[[str], str]:
+def make_gemini_call(model: str, api_key: str, timeout_s: float = GEMINI_TIMEOUT_S) -> Callable[[str], str]:
     from google import genai  # imported here so tests never need the SDK
+    from google.genai import types
 
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=int(timeout_s * 1000)))  # ms
 
     def call(prompt: str) -> str:
         response = client.models.generate_content(model=model, contents=prompt)

@@ -55,17 +55,31 @@ class FakeLLM:
 
 
 class FakeClock:
-    """Stands in for time.monotonic/time.sleep: sleeping advances the clock."""
+    """Stands in for time.monotonic/time.sleep: sleeping advances the clock.
+
+    wait(event, seconds) stands in for the Gemini timeout's wait: it gives a quick fake call a
+    moment of real time to finish; if it hasn't, the clock jumps forward `seconds` (no real waiting).
+    Waits are recorded separately from sleeps (retry waits and pacing).
+    """
+
+    REAL_GRACE_S = 0.5  # a fake call that answers at once finishes well within this
 
     def __init__(self) -> None:
         self.t = 1000.0
         self.sleeps: list[float] = []
+        self.waits: list[float] = []
 
     def clock(self) -> float:
         return self.t
 
     def sleep(self, seconds: float) -> None:
         self.sleeps.append(seconds)
+        self.t += seconds
+
+    def wait(self, event, seconds: float) -> None:
+        if event.wait(self.REAL_GRACE_S):
+            return
+        self.waits.append(seconds)
         self.t += seconds
 
 

@@ -15,6 +15,7 @@ Analyse one CSV file and produce a plain-English report: what the data contains,
 2. Cache: the web demo uses an in-memory cache only and writes nothing to disk (the prompt contains column names and category labels from the upload). The command-line tool keeps the disk cache in results/cache/.
 3. No separate daily cap on Gemini summaries: the limit of 20 analyses per day already caps the calls.
 4. Reports are self-contained HTML (charts embedded as images), both from the command-line tool and as the web download.
+5. (2026-11-09) Each Gemini call has a 60-second timeout. A timeout counts as a dropped connection and follows the same retry rules (command line: 2 retries; web: 1 retry). Added after the first live run took over 5 minutes. The SDK sends the timeout to Gemini as the request deadline, so the server may answer 504 DEADLINE_EXCEEDED first; a 504 counts as a timeout too.
 
 ## Evaluation
 - Unit tests use small CSV fixtures and a fake Gemini: no test touches the network.

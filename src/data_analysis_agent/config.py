@@ -27,6 +27,7 @@ IDENTIFIER_UNIQUE_SHARE = 0.9  # text columns more unique than this are identifi
 
 # Gemini (decision 3; continued 1)
 MIN_CALL_SPACING_S = 13.0
+GEMINI_TIMEOUT_S = 60.0  # continued 5: no reply within 60 s counts as a dropped connection
 GEMINI_RETRY_WAITS_S = (30.0, 60.0)  # command line: 503 / dropped connection retried twice; 429 never
 WEB_GEMINI_RETRY_WAITS_S = (10.0,)  # web demo: one retry after 10 s
 

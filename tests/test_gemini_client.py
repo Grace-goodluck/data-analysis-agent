@@ -1,11 +1,19 @@
 """Ported from website_audit_agent: same cache, pacer and retry rules (decision 3; continued 1–2)."""
 
+import threading
+
 import httpx
 import pytest
 
 from fakes import FakeClock
-from data_analysis_agent.config import WEB_GEMINI_RETRY_WAITS_S
-from data_analysis_agent.gemini_client import DiskCache, GeminiLLM, MemoryCache
+from data_analysis_agent.config import GEMINI_TIMEOUT_S, WEB_GEMINI_RETRY_WAITS_S
+from data_analysis_agent.gemini_client import (
+    DiskCache,
+    GeminiLLM,
+    MemoryCache,
+    call_with_timeout,
+    is_retryable,
+)
 from data_analysis_agent.pacing import Pacer
 from data_analysis_agent.ports import LLMError
 
@@ -25,7 +33,8 @@ class RecordingCall:
 def _llm(cache, call, clock=None, model="gemini-test", **kwargs):
     clock = clock or FakeClock()
     pacer = Pacer(13.0, clock.clock, clock.sleep)
-    return GeminiLLM(model, call, cache, pacer, sleep=clock.sleep, **kwargs), clock
+    llm = GeminiLLM(model, call, cache, pacer, sleep=clock.sleep, clock=clock.clock, wait=clock.wait, **kwargs)
+    return llm, clock
 
 
 def test_cache_hit_skips_api_and_pacer(tmp_path):
@@ -185,6 +194,108 @@ def test_dropped_connection_retried_twice_then_reported():
         llm.generate("p")
     assert call.calls == 3
     assert clock.sleeps == [30.0, 60.0]
+
+
+# --- timeout (continued 5) ---------------------------------------------------------------
+
+class NeverAnswers:
+    """A Gemini call that hangs until the test releases it. The injected clock makes it time out
+    without real waiting; releasing it at the end lets the abandoned worker threads finish."""
+
+    def __init__(self, then: list[str] | None = None) -> None:
+        self.release = threading.Event()
+        self.calls = 0
+        self.then = list(then or [])  # replies for the calls after the first (hanging) one
+
+    def __call__(self, prompt: str) -> str:
+        self.calls += 1
+        if self.calls > 1 and self.then:
+            return self.then.pop(0)
+        self.release.wait()
+        return "too late"
+
+
+@pytest.fixture
+def never_answers():
+    calls = []
+
+    def make(then=None):
+        call = NeverAnswers(then)
+        calls.append(call)
+        return call
+
+    yield make
+    for call in calls:
+        call.release.set()
+
+
+def test_timeout_after_60s_is_retried_twice_on_the_command_line(tmp_path, never_answers):
+    call = never_answers()
+    llm, clock = _llm(DiskCache(tmp_path), call)
+    start = clock.t
+    with pytest.raises(LLMError, match="no reply from Gemini within 60 s"):
+        llm.generate("p")
+    assert call.calls == 3  # first try + 2 retries, as for a dropped connection
+    assert clock.waits == [60.0, 60.0, 60.0]  # each attempt waited its full 60 s
+    assert clock.sleeps == [30.0, 60.0]  # the command line's retry waits
+    assert clock.t - start == pytest.approx(3 * 60 + 30 + 60)
+    assert DiskCache(tmp_path).get("gemini-test", "p") is None
+
+
+def test_timeout_on_the_web_is_retried_once(never_answers):
+    call = never_answers()
+    llm, clock = _llm(MemoryCache(), call, retry_waits=WEB_GEMINI_RETRY_WAITS_S)
+    with pytest.raises(LLMError, match="no reply from Gemini within 60 s"):
+        llm.generate("p")
+    assert call.calls == 2  # first try + 1 retry
+    assert clock.waits == [60.0, 60.0]
+    assert clock.sleeps == [10.0]
+
+
+def test_answer_after_a_timeout_is_used_and_cached(never_answers):
+    call = never_answers(then=["ok"])
+    cache = MemoryCache()
+    llm, clock = _llm(cache, call)
+    assert llm.generate("p") == "ok"
+    assert call.calls == 2
+    assert clock.waits == [60.0]
+    assert clock.sleeps == [30.0]
+    assert cache.get("gemini-test", "p") == "ok"
+
+
+def test_timeout_is_a_dropped_connection():
+    assert is_retryable(TimeoutError("no reply from Gemini within 60 s"))
+
+
+def test_server_side_deadline_504_is_retried_like_a_timeout():
+    """Seen in the live run of 2026-11-09: the SDK sends our 60 s as the request deadline and the
+    server answers 504 DEADLINE_EXCEEDED before our own timeout fires."""
+    call = ScriptedCall([FakeAPIError(504, "DEADLINE_EXCEEDED")])
+    llm, clock = _llm(MemoryCache(), call)
+    with pytest.raises(LLMError, match="504 DEADLINE_EXCEEDED"):
+        llm.generate("p")
+    assert call.calls == 3
+    assert clock.sleeps == [30.0, 60.0]
+
+
+def test_504_detected_from_message_without_code():
+    assert is_retryable(Exception("504 DEADLINE_EXCEEDED. {'error': {'code': 504}}"))
+    assert not is_retryable(Exception("429 RESOURCE_EXHAUSTED"))
+    assert not is_retryable(Exception("400 INVALID_ARGUMENT"))
+
+
+def test_default_timeout_is_60s():
+    assert GEMINI_TIMEOUT_S == 60.0
+
+
+def test_quick_answer_is_not_affected_by_the_timeout():
+    call = RecordingCall("fast")
+    assert call_with_timeout(call, "p", 60.0) == "fast"  # real clock: returns at once
+
+
+def test_errors_inside_the_call_come_back_unchanged():
+    with pytest.raises(RuntimeError, match="boom"):
+        call_with_timeout(RecordingCall(RuntimeError("boom")), "p", 60.0)
 
 
 def test_empty_reply_raises_llm_error():
