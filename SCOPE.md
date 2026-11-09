@@ -16,7 +16,7 @@ Analyse one CSV file and produce a plain-English report: what the data contains,
 3. No separate daily cap on Gemini summaries: the limit of 20 analyses per day already caps the calls.
 4. Reports are self-contained HTML (charts embedded as images), both from the command-line tool and as the web download.
 5. (2026-11-09) Each Gemini call has a 60-second timeout. A timeout counts as a dropped connection and follows the same retry rules (command line: 2 retries; web: 1 retry). Added after the first live run took over 5 minutes. The SDK sends the timeout to Gemini as the request deadline, so the server may answer 504 DEADLINE_EXCEEDED first; a 504 counts as a timeout too.
-6. (2026-11-09) The live demo uses gemini-3.6-flash (set in Render); 3.8-flash was timing out. The CLI default stays configurable via ANALYSIS_AGENT_MODEL.
+6. (2026-11-09) The live demo uses gemini-3.6-flash (set via ANALYSIS_AGENT_MODEL in Render) because 3.8-flash was timing out on the free tier. The CLI default stays configurable through the same variable.
 
 ## Evaluation
 - Unit tests use small CSV fixtures and a fake Gemini: no test touches the network.
